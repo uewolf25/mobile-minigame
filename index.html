@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#131C3D">
+<meta name="description" content="スマホの片手操作だけで遊べる、小さなミニゲーム置き場。">
+<title>mobile-minigame</title>
+<link rel="stylesheet" href="shared/arcade.css">
+<style>
+:root { --accent: var(--orange); }
+
+.screen { grid-template-rows: auto minmax(0, 1fr) auto; }
+
+.head { padding-bottom: 2px; }
+.head h1 {
+  margin: 0;
+  font-size: clamp(30px, 10vw, 42px);
+  font-weight: 800;
+  line-height: 1.05;
+}
+.head p {
+  margin: 6px 0 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--mist);
+}
+
+.list {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  padding-right: var(--drop);
+  padding-bottom: var(--drop);
+  min-height: 0;
+}
+.list li { list-style: none; display: flex; min-height: 0; }
+.list li:last-child { grid-column: 1 / -1; }
+
+.tile {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 4px;
+  min-height: 0;
+  padding: 10px 12px;
+  color: var(--paper);
+  text-decoration: none;
+  background: var(--ink-deep);
+  border: var(--edge) solid var(--ink-line);
+  border-radius: 0;
+  box-shadow: var(--drop) var(--drop) 0 var(--ink-line);
+  transition: transform .06s linear, box-shadow .06s linear;
+}
+.tile:active {
+  transform: translate(var(--drop), var(--drop));
+  box-shadow: 0 0 0 var(--ink-line);
+}
+
+.tile-icon {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  display: block;
+  color: var(--c);
+}
+.tile-name {
+  font-size: clamp(17px, 5.4vw, 21px);
+  font-weight: 800;
+  line-height: 1.1;
+}
+.tile-note {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--mist);
+  line-height: 1.2;
+}
+.tile-rec {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  border-top: 1px solid var(--ink-line);
+  padding-top: 5px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.tile-rec .k { font-size: 11px; font-weight: 700; color: var(--mist); }
+.tile-rec .v { font-size: 19px; font-weight: 800; color: var(--c); }
+.tile-rec .u { font-size: 11px; font-weight: 700; color: var(--mist); }
+.tile-rec.is-empty .v { color: var(--mist); }
+
+.tile--reflex { --c: var(--yellow); }
+.tile--merge  { --c: var(--orange); }
+.tile--dodge  { --c: var(--teal); }
+.tile--memory { --c: var(--orange); }
+.tile--whack  { --c: var(--yellow); }
+
+.foot-note {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--mist);
+  text-align: center;
+}
+</style>
+</head>
+<body>
+<div class="screen">
+
+  <header class="head">
+    <h1><span class="plate" data-text="ミニゲーム">ミニゲーム</span></h1>
+    <p>片手で30秒。記録はこの端末の中だけ。</p>
+  </header>
+
+  <ul class="list" id="list">
+
+    <li>
+      <a class="tile tile--reflex" href="reflex/">
+        <svg class="tile-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="4" fill="currentColor"></circle>
+          <g stroke="currentColor" stroke-width="2.4" stroke-linecap="square" fill="none">
+            <path d="M12 1v3.4"></path><path d="M12 19.6V23"></path>
+            <path d="M1 12h3.4"></path><path d="M19.6 12H23"></path>
+            <path d="M4.3 4.3l2.4 2.4"></path><path d="M17.3 17.3l2.4 2.4"></path>
+            <path d="M19.7 4.3l-2.4 2.4"></path><path d="M6.7 17.3l-2.4 2.4"></path>
+          </g>
+        </svg>
+        <span>
+          <span class="tile-name">反射</span><br>
+          <span class="tile-note">黄色でタップ</span>
+        </span>
+        <span class="tile-rec is-empty" data-key="mmg.reflex.best" data-unit="ms">
+          <span class="k">最速</span><span class="v">—</span>
+        </span>
+      </a>
+    </li>
+
+    <li>
+      <a class="tile tile--merge" href="merge/">
+        <svg class="tile-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="1" y="1" width="9" height="9" fill="currentColor"></rect>
+          <rect x="14" y="1" width="9" height="9" fill="none" stroke="currentColor" stroke-width="2.4"></rect>
+          <rect x="5" y="14" width="14" height="9" fill="currentColor"></rect>
+        </svg>
+        <span>
+          <span class="tile-name">そろえる</span><br>
+          <span class="tile-note">4×4 スワイプ</span>
+        </span>
+        <span class="tile-rec is-empty" data-key="mmg.merge.best" data-unit="点">
+          <span class="k">さいこう</span><span class="v">—</span>
+        </span>
+      </a>
+    </li>
+
+    <li>
+      <a class="tile tile--dodge" href="dodge/">
+        <svg class="tile-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="14" y="0" width="9" height="8" fill="currentColor"></rect>
+          <rect x="14" y="16" width="9" height="8" fill="currentColor"></rect>
+          <circle cx="6" cy="12" r="4.6" fill="currentColor"></circle>
+        </svg>
+        <span>
+          <span class="tile-name">くぐる</span><br>
+          <span class="tile-note">すき間を抜ける</span>
+        </span>
+        <span class="tile-rec is-empty" data-key="mmg.dodge.best" data-unit="こ">
+          <span class="k">さいこう</span><span class="v">—</span>
+        </span>
+      </a>
+    </li>
+
+    <li>
+      <a class="tile tile--memory" href="memory/">
+        <svg class="tile-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="1" y="1" width="10" height="10" fill="currentColor"></rect>
+          <rect x="13" y="1" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.4"></rect>
+          <rect x="1" y="13" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.4"></rect>
+          <rect x="13" y="13" width="10" height="10" fill="currentColor"></rect>
+        </svg>
+        <span>
+          <span class="tile-name">おぼえる</span><br>
+          <span class="tile-note">光った順になぞる</span>
+        </span>
+        <span class="tile-rec is-empty" data-key="mmg.memory.best" data-unit="つ">
+          <span class="k">さいこう</span><span class="v">—</span>
+        </span>
+      </a>
+    </li>
+
+    <li>
+      <a class="tile tile--whack" href="whack/">
+        <svg class="tile-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="8" r="6" fill="currentColor"></circle>
+          <rect x="1" y="17" width="22" height="6" fill="none" stroke="currentColor" stroke-width="2.4"></rect>
+        </svg>
+        <span>
+          <span class="tile-name">たたく</span><br>
+          <span class="tile-note">30秒で何個</span>
+        </span>
+        <span class="tile-rec is-empty" data-key="mmg.whack.best" data-unit="こ">
+          <span class="k">さいこう</span><span class="v">—</span>
+        </span>
+      </a>
+    </li>
+
+  </ul>
+
+  <p class="foot-note">記録はこの端末に保存され、外には出ない。</p>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* localStorage が読めない端末でも一覧は出す */
+  function read(key) {
+    try {
+      var n = parseInt(window.localStorage.getItem(key), 10);
+      return isFinite(n) && n > 0 ? n : 0;
+    } catch (e) { return 0; }
+  }
+
+  function paint() {
+    var recs = document.querySelectorAll('.tile-rec');
+    for (var i = 0; i < recs.length; i++) {
+      var el = recs[i];
+      var v = read(el.getAttribute('data-key'));
+      var unit = el.getAttribute('data-unit');
+      var out = el.querySelector('.v');
+      var old = el.querySelector('.u');
+      if (old) { old.parentNode.removeChild(old); }
+
+      if (v) {
+        el.className = 'tile-rec';
+        out.textContent = String(v);
+        var u = document.createElement('span');
+        u.className = 'u';
+        u.textContent = unit;
+        el.appendChild(u);
+      } else {
+        el.className = 'tile-rec is-empty';
+        out.textContent = '—';
+      }
+    }
+  }
+
+  paint();
+
+  /* 戻ってきたときに記録を出し直す */
+  window.addEventListener('pageshow', paint);
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) { paint(); }
+  });
+}());
+</script>
+</body>
+</html>
