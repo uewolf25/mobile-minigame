@@ -1,0 +1,16 @@
+# /etc/mmg/staging.conf   （chmod 600。トークンを書くので）
+REPO_URL=https://github.com/uewolf25/mobile-minigame.git
+REF=staging
+ROOT=/srv/mmg/staging
+HEALTH_URL=http://127.0.0.1:8081/
+KEEP_RELEASES=3
+
+# CSP をいきなり強制すると、取りこぼしがあったとき画面が白くなる。
+# 最初の数日は report-only で様子を見て、違反が出なければ enforce に上げる。
+CSP_MODE=report-only
+
+# Cloudflare のキャッシュ削除（任意）。3つ揃ったときだけ実行される。
+# トークンは Zone:Cache Purge の権限だけに絞ること。
+#CF_API_TOKEN=
+#CF_ZONE_ID=
+#SITE_ORIGIN=https://example.com

@@ -1,0 +1,22 @@
+[Unit]
+Description=mobile-minigame を配置する (%i)
+Documentation=https://github.com/uewolf25/mobile-minigame
+After=network-online.target caddy.service
+Wants=network-online.target
+Requires=caddy.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/mmg/deploy/mmg-deploy %i
+TimeoutStartSec=300
+
+# 書き込んでよいのは配信ディレクトリだけ
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/srv/mmg

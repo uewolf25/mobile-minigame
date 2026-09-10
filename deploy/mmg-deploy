@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+#
+# mobile-minigame をアトミックに配置する。
+#
+#   mmg-deploy <環境名>       /etc/mmg/<環境名>.conf を読む
+#
+# 同じコミットが既に出ていれば何もせずに終わる。systemd タイマーから
+# 何度呼ばれても副作用が出ないようにしてある。
+#
+set -euo pipefail
+
+ENV_NAME="${1:?環境名を指定すること（例: mmg-deploy prod）}"
+CONF="${MMG_CONF_DIR:-/etc/mmg}/${ENV_NAME}.conf"
+
+[ -r "$CONF" ] || { echo "設定が読めない: $CONF" >&2; exit 2; }
+# shellcheck source=/dev/null
+. "$CONF"
+
+: "${REPO_URL:?REPO_URL が未設定}"
+: "${REF:?REF が未設定}"
+: "${ROOT:?ROOT が未設定}"
+: "${HEALTH_URL:?HEALTH_URL が未設定}"
+KEEP_RELEASES="${KEEP_RELEASES:-5}"
+CSP_MODE="${CSP_MODE:-enforce}"
+
+MIRROR="${ROOT}/repo.git"
+RELEASES="${ROOT}/releases"
+CURRENT="${ROOT}/current"
+
+log() { printf '%s %s\n' "$(date -Is)" "$*"; }
+die() { log "ERROR: $*"; exit 1; }
+
+# タイマーと手動実行がかち合っても壊れないようにする
+exec 9>"${ROOT}/.deploy.lock"
+flock -n 9 || { log "他のデプロイが動いている。今回は見送る。"; exit 0; }
+
+mkdir -p "$RELEASES"
+
+# --- リポジトリを取り込む -------------------------------------------------
+if [ ! -d "$MIRROR" ]; then
+  log "ミラーを作る: $REPO_URL"
+  git clone --mirror --quiet "$REPO_URL" "$MIRROR"
+else
+  # mirror クローンなので refspec は +refs/*:refs/* が入っている
+  git --git-dir="$MIRROR" fetch --prune --quiet
+fi
+
+SHA="$(git --git-dir="$MIRROR" rev-parse --verify "refs/heads/${REF}")" \
+  || die "ref が見つからない: $REF"
+SHORT="${SHA:0:12}"
+
+if [ -L "$CURRENT" ] && [ "$(basename "$(readlink -f "$CURRENT")")" = "$SHORT" ]; then
+  log "$ENV_NAME は既に $SHORT。何もしない。"
+  exit 0
+fi
+
+# --- 取り出す -------------------------------------------------------------
+DEST="${RELEASES}/${SHORT}"
+if [ ! -d "$DEST" ]; then
+  log "$SHORT を取り出す"
+  TMP="$(mktemp -d "${RELEASES}/.tmp.XXXXXX")"
+  trap 'rm -rf "$TMP"' EXIT
+  # export-ignore が効くので deploy/ や README.md や .git は入らない
+  git --git-dir="$MIRROR" archive --format=tar "$SHA" | tar -x -C "$TMP"
+  mv -T "$TMP" "$DEST"
+  trap - EXIT
+fi
+
+# --- 中身が揃っているか ---------------------------------------------------
+MISSING=0
+for f in index.html shared/arcade.css \
+         reflex/index.html merge/index.html dodge/index.html \
+         memory/index.html whack/index.html; do
+  [ -f "${DEST}/${f}" ] || { log "足りない: $f"; MISSING=1; }
+done
+[ "$MISSING" -eq 0 ] || die "配信物が欠けている。切り替えない。"
+
+if grep -rqE '(href|src)="(https?:)?//' "$DEST" --include='*.html'; then
+  die "外部参照が混ざっている。仕様（外部依存ゼロ）に反するので切り替えない。"
+fi
+
+# --- CSP をこのリリースから作る -------------------------------------------
+CSP_FILE="${ROOT}/csp.caddy"
+"$(dirname "$0")/csp-hashes.py" "$DEST" "${CSP_FILE}.new"
+if [ "$CSP_MODE" = "report-only" ]; then
+  sed -i 's/^header Content-Security-Policy /header Content-Security-Policy-Report-Only /' \
+    "${CSP_FILE}.new"
+fi
+
+# --- 切り替え -------------------------------------------------------------
+PREV=""
+[ -L "$CURRENT" ] && PREV="$(readlink -f "$CURRENT")"
+
+mv -f "${CSP_FILE}.new" "$CSP_FILE"
+ln -sfn "$DEST" "${CURRENT}.new"
+mv -T "${CURRENT}.new" "$CURRENT"          # rename(2) なので瞬間的に入れ替わる
+
+caddy validate --config "${CADDYFILE:-/etc/caddy/Caddyfile}" >/dev/null 2>&1 \
+  || die "Caddy 設定が通らない。切り替えを戻す必要がある。"
+systemctl reload caddy
+
+# --- 生きているか確かめ、駄目なら戻す -------------------------------------
+sleep 1
+CODE="$(curl -fsS -o /dev/null -w '%{http_code}' --max-time 10 "$HEALTH_URL" || true)"
+if [ "$CODE" != "200" ]; then
+  log "健全性確認に失敗（HTTP ${CODE:-無応答}）"
+  if [ -n "$PREV" ]; then
+    log "$(basename "$PREV") に戻す"
+    ln -sfn "$PREV" "${CURRENT}.new" && mv -T "${CURRENT}.new" "$CURRENT"
+    "$(dirname "$0")/csp-hashes.py" "$PREV" "$CSP_FILE" || true
+    systemctl reload caddy || true
+  fi
+  die "デプロイを取り消した。"
+fi
+
+log "$ENV_NAME を $SHORT に切り替えた（HTTP 200）"
+
+# --- Cloudflare のキャッシュを落とす（任意）-------------------------------
+if [ -n "${CF_API_TOKEN:-}" ] && [ -n "${CF_ZONE_ID:-}" ] && [ -n "${SITE_ORIGIN:-}" ]; then
+  URLS="$(cd "$DEST" && {
+    find . -name '*.html' -printf '%h/\n' | sed 's|^\./||; s|^\./*$||'
+    find . -name '*.css'  -printf '%p\n'  | sed 's|^\./||'
+  } | sed "s|^|${SITE_ORIGIN%/}/|; s|/\+$|/|" | sort -u)"
+  BODY="$(printf '%s\n' "$URLS" | jq -R . | jq -s '{files: .}')"
+  if curl -fsS -X POST \
+      "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/purge_cache" \
+      -H "Authorization: Bearer ${CF_API_TOKEN}" \
+      -H "Content-Type: application/json" \
+      --data "$BODY" >/dev/null; then
+    log "Cloudflare のキャッシュを落とした（$(printf '%s\n' "$URLS" | wc -l)件）"
+  else
+    log "警告: キャッシュ削除に失敗。配信自体は成功している。"
+  fi
+fi
+
+# --- 古いリリースを片付ける -----------------------------------------------
+KEEP_SHA="$(basename "$(readlink -f "$CURRENT")")"
+# shellcheck disable=SC2012
+ls -1dt "${RELEASES}"/*/ 2>/dev/null | tail -n +$((KEEP_RELEASES + 1)) | while read -r old; do
+  [ "$(basename "$old")" = "$KEEP_SHA" ] && continue
+  log "古いリリースを消す: $(basename "$old")"
+  rm -rf "$old"
+done

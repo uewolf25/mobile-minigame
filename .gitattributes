@@ -1,0 +1,7 @@
+# 配信物に含めないもの。
+# デプロイは `git archive` でツリーを取り出すので、export-ignore を付けたものは
+# そもそも web ルートに存在しない。.git も archive には入らない。
+/.gitattributes  export-ignore
+/.github/        export-ignore
+/deploy/         export-ignore
+/README.md       export-ignore

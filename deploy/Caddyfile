@@ -1,0 +1,72 @@
+# mobile-minigame / オリジン側の Caddy
+#
+# TLS は Cloudflare のエッジで終端する。cloudflared がループバックに繋ぐので、
+# ここは平文 HTTP でよく、証明書の取得も更新も持たない。
+# ドメイン名はここに書かない（振り分けは cloudflared の ingress が持つ）。
+
+{
+	# 443 を持たないので自動 HTTPS は不要
+	auto_https off
+
+	servers {
+		# cloudflared はループバックから繋いでくる。
+		# 実クライアントの IP は Cloudflare が CF-Connecting-IP に入れる。
+		trusted_proxies static 127.0.0.1/32 ::1/128
+		client_ip_headers CF-Connecting-IP
+	}
+}
+
+(common) {
+	file_server
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		Cross-Origin-Opener-Policy "same-origin"
+		Cross-Origin-Resource-Policy "same-origin"
+		# 端末の機能は一切使わない。渡した相手の端末で何も要求しないことを明示する。
+		Permissions-Policy "accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=(), midi=()"
+		# 合計90KB弱なので短めに握って、更新がすぐ届くほうを取る
+		Cache-Control "public, max-age=300"
+		-Server
+	}
+
+	# 打ち間違いで空白のエラー画面に落ちるより、一覧に戻すほうが渡しやすい
+	handle_errors {
+		@notfound expression {err.status_code} == 404
+		redir @notfound / temporary
+	}
+}
+
+# ---- 本番 -----------------------------------------------------------------
+:8080 {
+	root * /srv/mmg/prod/current
+	import /srv/mmg/prod/csp.caddy
+	import common
+
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
+	log {
+		output file /var/log/caddy/prod.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}
+
+# ---- 検証（実機で触って #7 / #8 を判断するため）----------------------------
+:8081 {
+	root * /srv/mmg/staging/current
+	import /srv/mmg/staging/csp.caddy
+	import common
+
+	header X-Robots-Tag "noindex, nofollow"
+
+	log {
+		output file /var/log/caddy/staging.log {
+			roll_size 10MiB
+			roll_keep 3
+		}
+	}
+}
