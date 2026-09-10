@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#131C3D">
+<meta name="description" content="4×4のスワイプパズル。同じ数字がぶつかると合体する。">
+<title>そろえる — mobile-minigame</title>
+<link rel="stylesheet" href="../shared/arcade.css">
+<style>
+:root { --accent: var(--orange); }
+
+.board {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  grid-template-rows: repeat(4, 1fr);
+  gap: 6px;
+  padding: 6px;
+  background: var(--ink-deep);
+  border: var(--edge) solid var(--ink-line);
+  border-radius: 0;
+  box-shadow: var(--drop) var(--drop) 0 var(--accent);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0;
+  background: var(--ink);
+  color: var(--paper);
+  font-weight: 800;
+  line-height: 1;
+  font-size: calc(var(--cell, 60px) * 0.44);
+}
+.cell.len3 { font-size: calc(var(--cell, 60px) * 0.34); }
+.cell.len4 { font-size: calc(var(--cell, 60px) * 0.26); }
+
+/* 版は橙1色と紺・紙の濃淡だけで進みを見せる */
+.cell[data-v="2"]    { background: var(--ink-line); color: var(--mist); }
+.cell[data-v="4"]    { background: var(--ink-line); color: var(--paper); }
+.cell[data-v="8"]    { background: var(--mist);     color: var(--ink); }
+.cell[data-v="16"]   { background: var(--paper);    color: var(--ink); }
+.cell[data-v="32"]   { background: var(--paper);    color: var(--orange); }
+.cell[data-v="64"]   { background: var(--orange);   color: var(--ink); }
+.cell[data-v="128"]  { background: var(--orange);   color: var(--paper); }
+.cell[data-v="256"]  { background: var(--paper);    color: var(--orange); box-shadow: inset 0 0 0 4px var(--orange); }
+.cell[data-v="512"]  { background: var(--orange);   color: var(--paper); box-shadow: inset 0 0 0 4px var(--paper); }
+.cell[data-v="1024"] { background: var(--ink-deep); color: var(--orange); box-shadow: inset 0 0 0 4px var(--orange); }
+.cell[data-v="2048"],
+.cell[data-v="4096"],
+.cell[data-v="8192"] { background: var(--orange); color: var(--paper); box-shadow: inset 0 0 0 4px var(--paper), inset 0 0 0 8px var(--orange); }
+
+/* 動きは操作への返事だけ。出現と合体の160ms。 */
+@keyframes mmg-pop {
+  0%   { transform: scale(.35); }
+  70%  { transform: scale(1.06); }
+  100% { transform: scale(1); }
+}
+@keyframes mmg-bump {
+  0%   { transform: scale(1); }
+  45%  { transform: scale(1.16); }
+  100% { transform: scale(1); }
+}
+.cell.is-new   { animation: mmg-pop  160ms ease-out; }
+.cell.is-merge { animation: mmg-bump 160ms ease-out; }
+
+.hint {
+  margin: 8px 0 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--mist);
+  text-align: center;
+}
+</style>
+</head>
+<body>
+<div class="screen">
+
+  <header class="top">
+    <a class="back" href="../" aria-label="一覧にもどる">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="square" aria-hidden="true">
+        <path d="M15 4 L7 12 L15 20"></path>
+      </svg>
+    </a>
+    <h1 class="top-title"><span class="plate" data-text="そろえる">そろえる</span></h1>
+    <span class="top-note">スワイプ</span>
+  </header>
+
+  <div class="strip">
+    <div class="stat">
+      <span class="stat-label">とくてん</span>
+      <span class="stat-value" id="s-score">0</span>
+    </div>
+    <div class="stat stat--accent">
+      <span class="stat-label">さいこう</span>
+      <span class="stat-value" id="s-best">0</span>
+    </div>
+    <div class="stat">
+      <span class="stat-label">いちばん大きい</span>
+      <span class="stat-value" id="s-max">0</span>
+    </div>
+  </div>
+
+  <main class="stage">
+    <div class="board" id="board" tabindex="0" role="application"
+         aria-label="4かける4の盤面。矢印キーかスワイプで動かす"></div>
+    <p class="hint">上下左右にスワイプ（矢印キーでも動く）</p>
+
+    <div class="sheet" id="sheet" hidden>
+      <h2 class="sheet-title" id="sheet-title">おしまい</h2>
+      <p class="sheet-body" id="sheet-body"></p>
+      <button class="btn" id="sheet-btn" type="button">もう一度</button>
+    </div>
+
+    <p class="visually-hidden" id="live" role="status" aria-live="polite"></p>
+  </main>
+
+  <div class="foot">
+    <button class="btn" id="undo" type="button" disabled>1手もどす</button>
+    <button class="btn btn--sub" id="reset" type="button">はじめから</button>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var KEY = 'mmg.merge.best';
+
+  function load() {
+    try {
+      var n = parseInt(window.localStorage.getItem(KEY), 10);
+      return isFinite(n) && n > 0 ? n : 0;
+    } catch (e) { return 0; }
+  }
+  function save(n) {
+    try { window.localStorage.setItem(KEY, String(n)); } catch (e) {}
+  }
+
+  var N = 4;
+  var boardEl  = document.getElementById('board');
+  var stageEl  = boardEl.parentNode;
+  var undoBtn  = document.getElementById('undo');
+  var resetBtn = document.getElementById('reset');
+  var sheet    = document.getElementById('sheet');
+  var sheetTtl = document.getElementById('sheet-title');
+  var sheetBody= document.getElementById('sheet-body');
+  var sheetBtn = document.getElementById('sheet-btn');
+  var live     = document.getElementById('live');
+  var elScore  = document.getElementById('s-score');
+  var elBest   = document.getElementById('s-best');
+  var elMax    = document.getElementById('s-max');
+
+  var cells = [];
+  var i;
+  for (i = 0; i < N * N; i++) {
+    var d = document.createElement('div');
+    d.className = 'cell';
+    boardEl.appendChild(d);
+    cells.push(d);
+  }
+
+  var grid    = [];
+  var score   = 0;
+  var best    = load();
+  var over    = false;
+  var reached = false;   /* 2048 の知らせは一度だけ */
+  var prev    = null;    /* 戻せるのは1手ぶんだけ */
+
+  function blank() {
+    var g = [];
+    for (var k = 0; k < N * N; k++) { g.push(0); }
+    return g;
+  }
+
+  function emptyCells(g) {
+    var out = [];
+    for (var k = 0; k < g.length; k++) { if (g[k] === 0) { out.push(k); } }
+    return out;
+  }
+
+  /* 新規タイルは 2 が90%、4 が10% */
+  function spawn(marks) {
+    var free = emptyCells(grid);
+    if (!free.length) { return -1; }
+    var at = free[Math.floor(Math.random() * free.length)];
+    grid[at] = Math.random() < 0.9 ? 2 : 4;
+    if (marks) { marks.fresh.push(at); }
+    return at;
+  }
+
+  /* 進む向きに合わせた4本の並び。配列の先頭が「寄せる側」。 */
+  function lines(dir) {
+    var out = [], r, c, line;
+    for (r = 0; r < N; r++) {
+      line = [];
+      for (c = 0; c < N; c++) {
+        if (dir === 'left')  { line.push(r * N + c); }
+        if (dir === 'right') { line.push(r * N + (N - 1 - c)); }
+        if (dir === 'up')    { line.push(c * N + r); }
+        if (dir === 'down')  { line.push((N - 1 - c) * N + r); }
+      }
+      out.push(line);
+    }
+    return out;
+  }
+
+  function move(dir) {
+    if (over) { return false; }
+
+    var before = grid.slice();
+    var beforeScore = score;
+    var marks = { merged: [], fresh: [] };
+    var moved = false;
+    var ls = lines(dir);
+
+    for (var li = 0; li < ls.length; li++) {
+      var idx = ls[li];
+      var vals = [];
+      var k;
+      for (k = 0; k < idx.length; k++) {
+        if (grid[idx[k]] !== 0) { vals.push(grid[idx[k]]); }
+      }
+
+      var out = [], mergedAt = [];
+      k = 0;
+      while (k < vals.length) {
+        if (k + 1 < vals.length && vals[k] === vals[k + 1]) {
+          var sum = vals[k] * 2;
+          out.push(sum);
+          mergedAt.push(out.length - 1);
+          score += sum;
+          if (sum >= 2048 && !reached) { reached = true; announce2048(); }
+          k += 2;
+        } else {
+          out.push(vals[k]);
+          k += 1;
+        }
+      }
+      while (out.length < N) { out.push(0); }
+
+      for (k = 0; k < N; k++) {
+        if (grid[idx[k]] !== out[k]) { moved = true; }
+        grid[idx[k]] = out[k];
+      }
+      for (k = 0; k < mergedAt.length; k++) { marks.merged.push(idx[mergedAt[k]]); }
+    }
+
+    if (!moved) { score = beforeScore; return false; }
+
+    prev = { grid: before, score: beforeScore };
+    undoBtn.disabled = false;
+
+    spawn(marks);
+    if (score > best) { best = score; save(best); }   /* 表示より先に更新する */
+    render(marks);
+
+    if (!canMove()) { finish(); }
+    return true;
+  }
+
+  function canMove() {
+    if (emptyCells(grid).length) { return true; }
+    for (var r = 0; r < N; r++) {
+      for (var c = 0; c < N; c++) {
+        var v = grid[r * N + c];
+        if (c + 1 < N && grid[r * N + c + 1] === v) { return true; }
+        if (r + 1 < N && grid[(r + 1) * N + c] === v) { return true; }
+      }
+    }
+    return false;
+  }
+
+  function maxTile() {
+    var m = 0;
+    for (var k = 0; k < grid.length; k++) { if (grid[k] > m) { m = grid[k]; } }
+    return m;
+  }
+
+  function render(marks) {
+    for (var k = 0; k < cells.length; k++) {
+      var el = cells[k];
+      var v = grid[k];
+      var text = v ? String(v) : '';
+      var cls = 'cell';
+      if (text.length === 3) { cls += ' len3'; }
+      if (text.length >= 4)  { cls += ' len4'; }
+
+      el.textContent = text;
+      if (v) { el.setAttribute('data-v', String(v)); }
+      else   { el.removeAttribute('data-v'); }
+      el.className = cls;
+    }
+
+    if (marks) {
+      var m;
+      for (m = 0; m < marks.merged.length; m++) { bounce(cells[marks.merged[m]], 'is-merge'); }
+      for (m = 0; m < marks.fresh.length;  m++) { bounce(cells[marks.fresh[m]],  'is-new');   }
+    }
+
+    elScore.textContent = String(score);
+    elBest.textContent  = String(best);
+    elMax.textContent   = String(maxTile());
+  }
+
+  function bounce(el, cls) {
+    el.classList.remove(cls);
+    void el.offsetWidth;        /* 同じクラスを付け直すためのリフロー */
+    el.classList.add(cls);
+  }
+
+  function announce2048() {
+    /* 一度だけ知らせて、そのまま続けられる */
+    window.setTimeout(function () {
+      sheetTtl.textContent = '2048！';
+      sheetBody.innerHTML = 'そのまま続けられる。<br>まだ上をねらえる。';
+      sheetBtn.textContent = 'つづける';
+      sheet.hidden = false;
+      sheetBtn.focus();
+    }, 180);
+  }
+
+  function finish() {
+    over = true;
+    sheetTtl.textContent = 'おしまい';
+    sheetBody.innerHTML = '<b>' + score + '</b><br>いちばん大きいのは ' + maxTile();
+    sheetBtn.textContent = 'もう一度';
+    sheet.hidden = false;
+    sheetBtn.focus();
+    live.textContent = 'おしまい。得点 ' + score;
+  }
+
+  function reset() {
+    grid = blank();
+    score = 0;
+    over = false;
+    reached = false;
+    prev = null;
+    undoBtn.disabled = true;
+    sheet.hidden = true;
+    var marks = { merged: [], fresh: [] };
+    spawn(marks);
+    spawn(marks);
+    render(marks);
+    boardEl.focus();
+  }
+
+  function undo() {
+    if (!prev) { return; }
+    grid = prev.grid.slice();
+    score = prev.score;
+    prev = null;
+    over = false;
+    undoBtn.disabled = true;
+    sheet.hidden = true;
+    render(null);
+    live.textContent = '1手もどした';
+  }
+
+  /* --- 盤面の大きさ。端末が変わっても正方形を保つ --- */
+  function fit() {
+    var w = stageEl.clientWidth;
+    var h = stageEl.clientHeight - 28;   /* 下の説明ぶん */
+    var size = Math.max(180, Math.min(w, h));
+    boardEl.style.width  = size + 'px';
+    boardEl.style.height = size + 'px';
+    boardEl.style.setProperty('--cell', ((size - 12 - 18) / 4) + 'px');
+  }
+  window.addEventListener('resize', fit);
+  window.addEventListener('orientationchange', fit);
+
+  /* --- スワイプ。ページスクロールに取られないよう passive:false --- */
+  var sx = 0, sy = 0, tracking = false;
+  var THRESHOLD = 22;
+
+  boardEl.addEventListener('pointerdown', function (e) {
+    tracking = true;
+    sx = e.clientX;
+    sy = e.clientY;
+  });
+
+  boardEl.addEventListener('touchmove', function (e) {
+    if (tracking) { e.preventDefault(); }
+  }, { passive: false });
+
+  function endSwipe(e) {
+    if (!tracking) { return; }
+    tracking = false;
+    var dx = e.clientX - sx;
+    var dy = e.clientY - sy;
+    if (Math.abs(dx) < THRESHOLD && Math.abs(dy) < THRESHOLD) { return; }
+    if (Math.abs(dx) > Math.abs(dy)) { move(dx > 0 ? 'right' : 'left'); }
+    else                             { move(dy > 0 ? 'down'  : 'up');   }
+  }
+  boardEl.addEventListener('pointerup', endSwipe);
+  boardEl.addEventListener('pointercancel', function () { tracking = false; });
+
+  /* --- キーボードだけでも一通り遊べる --- */
+  var KEYS = {
+    ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down',
+    a: 'left', d: 'right', w: 'up', s: 'down',
+    h: 'left', l: 'right', k: 'up', j: 'down'
+  };
+  document.addEventListener('keydown', function (e) {
+    if (e.metaKey || e.ctrlKey || e.altKey) { return; }
+    var dir = KEYS[e.key];
+    if (!dir) { return; }
+    if (!sheet.hidden) { return; }
+    e.preventDefault();
+    move(dir);
+  });
+
+  undoBtn.addEventListener('click', undo);
+  resetBtn.addEventListener('click', reset);
+  sheetBtn.addEventListener('click', function () {
+    if (over) { reset(); } else { sheet.hidden = true; boardEl.focus(); }
+  });
+
+  fit();
+  reset();
+  window.setTimeout(fit, 0);
+}());
+</script>
+</body>
+</html>

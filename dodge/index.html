@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#131C3D">
+<meta name="description" content="タップで浮かせて、流れてくる壁のすき間を抜ける。">
+<title>くぐる — mobile-minigame</title>
+<link rel="stylesheet" href="../shared/arcade.css">
+<style>
+:root { --accent: var(--teal); }
+
+.field {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: var(--ink-deep);
+  border: var(--edge) solid var(--ink-line);
+  border-radius: 0;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.field canvas { display: block; }
+
+.stage { padding-right: var(--drop); padding-bottom: var(--drop); }
+.field { box-shadow: var(--drop) var(--drop) 0 var(--accent); }
+</style>
+</head>
+<body>
+<div class="screen">
+
+  <header class="top">
+    <a class="back" href="../" aria-label="一覧にもどる">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="square" aria-hidden="true">
+        <path d="M15 4 L7 12 L15 20"></path>
+      </svg>
+    </a>
+    <h1 class="top-title"><span class="plate" data-text="くぐる">くぐる</span></h1>
+    <span class="top-note">タップで浮く</span>
+  </header>
+
+  <div class="strip">
+    <div class="stat">
+      <span class="stat-label">くぐった数</span>
+      <span class="stat-value" id="s-score">0</span>
+    </div>
+    <div class="stat stat--accent">
+      <span class="stat-label">さいこう</span>
+      <span class="stat-value" id="s-best">0</span>
+    </div>
+    <div class="stat">
+      <span class="stat-label">すき間</span>
+      <span class="stat-value" id="s-gap">—</span>
+    </div>
+  </div>
+
+  <main class="stage">
+    <div class="field" id="field">
+      <canvas id="cv"></canvas>
+    </div>
+
+    <div class="sheet" id="sheet">
+      <h2 class="sheet-title" id="sheet-title">くぐる</h2>
+      <p class="sheet-body" id="sheet-body">タップで浮く。<br>天井と床に当たっても失敗。</p>
+      <button class="btn" id="sheet-btn" type="button">はじめる</button>
+    </div>
+
+    <p class="visually-hidden" id="live" role="status" aria-live="polite"></p>
+  </main>
+
+  <div class="foot">
+    <button class="btn" id="flap" type="button">はねる</button>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var KEY = 'mmg.dodge.best';
+
+  function load() {
+    try {
+      var n = parseInt(window.localStorage.getItem(KEY), 10);
+      return isFinite(n) && n > 0 ? n : 0;
+    } catch (e) { return 0; }
+  }
+  function save(n) {
+    try { window.localStorage.setItem(KEY, String(n)); } catch (e) {}
+  }
+
+  var field    = document.getElementById('field');
+  var canvas   = document.getElementById('cv');
+  var ctx      = canvas.getContext('2d');
+  var sheet    = document.getElementById('sheet');
+  var sheetTtl = document.getElementById('sheet-title');
+  var sheetBody= document.getElementById('sheet-body');
+  var sheetBtn = document.getElementById('sheet-btn');
+  var flapBtn  = document.getElementById('flap');
+  var live     = document.getElementById('live');
+  var elScore  = document.getElementById('s-score');
+  var elBest   = document.getElementById('s-best');
+  var elGap    = document.getElementById('s-gap');
+
+  var C = {
+    deep:  '#0B1027',
+    line:  '#2B3766',
+    paper: '#EFEAE0',
+    teal:  '#3FC7B4',
+    mist:  '#8E96B4'
+  };
+
+  /* 論理座標は幅300で固定。端末幅が変わっても難易度は変わらない。 */
+  var W = 300;
+  var H = 500;
+
+  var GRAVITY_K = 2.6;    /* 2.6 * H */
+  var FLAP_K    = -0.80;  /* -0.80 * H */
+  var WALL_W_K  = 0.14;
+  var SPACING_K = 0.72;
+
+  var state  = 'ready';   /* ready / play / over */
+  var score  = 0;
+  var best   = load();
+  var walls  = [];
+  var made   = 0;         /* 出した壁の通し番号（すき間の狭まりに使う） */
+  var ball   = { x: 0, y: 0, vy: 0, r: 0 };
+  var raf    = 0;
+  var lastT  = 0;
+  var overAt = 0;
+
+  function wallW()   { return WALL_W_K * W; }
+  function spacing() { return SPACING_K * W; }
+  function speed()   { return (0.52 + Math.min(score, 25) * 0.008) * W; }
+  function gapH(n)   { return Math.max(0.19, 0.29 - n * 0.006) * H; }
+
+  function fit() {
+    var w = field.clientWidth;
+    var h = field.clientHeight;
+    if (w <= 0 || h <= 0) { return; }
+
+    var dpr = Math.min(window.devicePixelRatio || 1, 3);
+    canvas.style.width  = w + 'px';
+    canvas.style.height = h + 'px';
+    canvas.width  = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+
+    W = 300;
+    H = 300 * (h / w);
+
+    var s = canvas.width / W;
+    ctx.setTransform(s, 0, 0, s, 0, 0);
+
+    ball.x = 0.30 * W;
+    ball.r = 0.052 * W;
+    draw();
+  }
+
+  function reset() {
+    score = 0;
+    made = 0;
+    walls = [];
+    ball.y = H * 0.4;
+    ball.vy = 0;
+    overAt = 0;
+    updateStrip();
+  }
+
+  function makeWall(x) {
+    var g = gapH(made);
+    var margin = 0.07 * H;
+    var top = margin + Math.random() * Math.max(1, (H - g - margin * 2));
+    made += 1;
+    return { x: x, gapY: top, gapH: g, passed: false };
+  }
+
+  function pump() {
+    var last = walls.length ? walls[walls.length - 1] : null;
+    if (!last) { walls.push(makeWall(W + 40)); return; }
+    if (last.x + spacing() <= W + wallW()) { walls.push(makeWall(last.x + spacing())); }
+  }
+
+  function start() {
+    reset();
+    state = 'play';
+    sheet.hidden = true;
+    lastT = 0;
+    flap();
+    loop();
+  }
+
+  function flap() {
+    if (state === 'ready') { start(); return; }
+    if (state === 'over') {
+      if (nowMs() - overAt > 450) { start(); }
+      return;
+    }
+    ball.vy = FLAP_K * H;
+  }
+
+  function nowMs() {
+    return (window.performance && window.performance.now)
+      ? window.performance.now()
+      : new Date().getTime();
+  }
+
+  function finish() {
+    state = 'over';
+    overAt = nowMs();
+    if (raf) { window.cancelAnimationFrame(raf); raf = 0; }
+    sheetTtl.textContent = 'ぶつかった';
+    sheetBody.innerHTML = '<b>' + score + '</b><br>くぐった数';
+    sheetBtn.textContent = 'もう一度';
+    sheet.hidden = false;
+    sheetBtn.focus();
+    live.textContent = 'ぶつかった。' + score + 'つくぐった';
+    updateStrip();
+    draw();
+  }
+
+  function updateStrip() {
+    elScore.textContent = String(score);
+    elBest.textContent  = String(best);
+    elGap.textContent   = Math.round((gapH(made) / H) * 100) + '%';
+  }
+
+  function step(dt) {
+    ball.vy += GRAVITY_K * H * dt;
+    ball.y  += ball.vy * dt;
+
+    var v = speed() * dt;
+    var i;
+    for (i = 0; i < walls.length; i++) { walls[i].x -= v; }
+
+    while (walls.length && walls[0].x + wallW() < -10) { walls.shift(); }
+    pump();
+
+    /* 天井・床への接触も失敗 */
+    if (ball.y - ball.r <= 0 || ball.y + ball.r >= H) { finish(); return; }
+
+    for (i = 0; i < walls.length; i++) {
+      var wl = walls[i];
+      var overlapX = (ball.x + ball.r > wl.x) && (ball.x - ball.r < wl.x + wallW());
+      if (overlapX) {
+        if (ball.y - ball.r < wl.gapY || ball.y + ball.r > wl.gapY + wl.gapH) { finish(); return; }
+      }
+      if (!wl.passed && wl.x + wallW() < ball.x - ball.r) {
+        wl.passed = true;
+        score += 1;
+        /* くぐった時点で残す。途中で画面を閉じても記録は消えない。 */
+        if (score > best) { best = score; save(best); }
+        updateStrip();
+      }
+    }
+  }
+
+  function draw() {
+    ctx.fillStyle = C.deep;
+    ctx.fillRect(0, 0, W, H);
+
+    /* 天井と床。当たると失敗する場所をはっきり見せる */
+    var bar = Math.max(3, 0.012 * H);
+    ctx.fillStyle = C.line;
+    ctx.fillRect(0, 0, W, bar);
+    ctx.fillRect(0, H - bar, W, bar);
+
+    var ww = wallW();
+    var i;
+    for (i = 0; i < walls.length; i++) {
+      var wl = walls[i];
+      var bottomY = wl.gapY + wl.gapH;
+
+      /* 版ズレのオフセット（ぼかさない） */
+      ctx.fillStyle = C.line;
+      ctx.fillRect(wl.x + 4, 4, ww, wl.gapY);
+      ctx.fillRect(wl.x + 4, bottomY + 4, ww, H - bottomY);
+
+      ctx.fillStyle = C.teal;
+      ctx.fillRect(wl.x, 0, ww, wl.gapY);
+      ctx.fillRect(wl.x, bottomY, ww, H - bottomY);
+
+      ctx.fillStyle = C.deep;
+      ctx.fillRect(wl.x, wl.gapY - 3, ww, 3);
+      ctx.fillRect(wl.x, bottomY, ww, 3);
+    }
+
+    /* ボール：紙色に青緑の版ズレ */
+    ctx.fillStyle = C.teal;
+    circle(ball.x + 3, ball.y + 3, ball.r);
+    ctx.fillStyle = C.paper;
+    circle(ball.x, ball.y, ball.r);
+
+    ctx.strokeStyle = C.deep;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, ball.r * 0.58, -0.5, 1.9);
+    ctx.stroke();
+  }
+
+  function circle(x, y, r) {
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function loop() {
+    raf = window.requestAnimationFrame(function (t) {
+      if (state !== 'play') { return; }
+      if (!lastT) { lastT = t; }
+      var dt = Math.min((t - lastT) / 1000, 1 / 30);
+      lastT = t;
+      step(dt);
+      if (state === 'play') { draw(); loop(); }
+    });
+  }
+
+  /* --- 入力。click は遅延が出るので pointerdown --- */
+  field.addEventListener('pointerdown', function (e) { e.preventDefault(); flap(); });
+  field.addEventListener('touchmove', function (e) { e.preventDefault(); }, { passive: false });
+
+  flapBtn.addEventListener('pointerdown', function (e) { e.preventDefault(); flap(); });
+  flapBtn.addEventListener('keydown', function (e) {
+    if (e.key === ' ' || e.key === 'Enter' || e.key === 'Spacebar') { e.preventDefault(); flap(); }
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === ' ' || e.key === 'Spacebar' || e.key === 'ArrowUp' || e.key === 'w') {
+      e.preventDefault();
+      flap();
+    }
+  });
+
+  sheetBtn.addEventListener('click', function () { start(); });
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden && state === 'play') { finish(); }
+  });
+
+  window.addEventListener('resize', fit);
+  window.addEventListener('orientationchange', fit);
+
+  fit();
+  reset();
+  draw();
+  updateStrip();
+  window.setTimeout(fit, 0);
+}());
+</script>
+</body>
+</html>

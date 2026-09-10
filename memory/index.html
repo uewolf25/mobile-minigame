@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#131C3D">
+<meta name="description" content="光った順番をなぞり返す。1回ごとに1つ長くなる。">
+<title>おぼえる — mobile-minigame</title>
+<link rel="stylesheet" href="../shared/arcade.css">
+<style>
+:root { --accent: var(--orange); }
+
+.pads {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  grid-template-rows: repeat(2, 1fr);
+  gap: 8px;
+  padding: 8px;
+  background: var(--ink-deep);
+  border: var(--edge) solid var(--ink-line);
+  border-radius: 0;
+  box-shadow: var(--drop) var(--drop) 0 var(--accent);
+}
+
+.pad {
+  -webkit-appearance: none;
+  appearance: none;
+  position: relative;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  /* インクが乗っていない状態＝色の枠だけ。光るとその色で塗りつぶす。 */
+  background: var(--ink-deep);
+  box-shadow: inset 0 0 0 11px var(--c);
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.pad.is-lit { background: var(--c); }
+.pad[aria-disabled="true"] { cursor: default; }
+
+.pad-num {
+  position: absolute;
+  left: 16px;
+  top: 13px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--c);
+}
+.pad.is-lit .pad-num { color: var(--ink); }
+
+.pad--1 { --c: var(--orange); }
+.pad--2 { --c: var(--yellow); }
+.pad--3 { --c: var(--teal); }
+.pad--4 { --c: var(--paper); }
+
+@keyframes mmg-press {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(.94); }
+  100% { transform: scale(1); }
+}
+.pad.is-press { animation: mmg-press 140ms ease-out; }
+
+.say {
+  margin: 8px 0 0;
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--mist);
+  text-align: center;
+  min-height: 20px;
+}
+</style>
+</head>
+<body>
+<div class="screen">
+
+  <header class="top">
+    <a class="back" href="../" aria-label="一覧にもどる">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="square" aria-hidden="true">
+        <path d="M15 4 L7 12 L15 20"></path>
+      </svg>
+    </a>
+    <h1 class="top-title"><span class="plate" data-text="おぼえる">おぼえる</span></h1>
+    <span class="top-note">なぞり返す</span>
+  </header>
+
+  <div class="strip">
+    <div class="stat">
+      <span class="stat-label">ながさ</span>
+      <span class="stat-value" id="s-len">0</span>
+    </div>
+    <div class="stat">
+      <span class="stat-label">なぞった</span>
+      <span class="stat-value" id="s-at">0</span>
+    </div>
+    <div class="stat stat--accent">
+      <span class="stat-label">さいこう</span>
+      <span class="stat-value" id="s-best">0</span>
+    </div>
+  </div>
+
+  <main class="stage">
+    <div class="pads" id="pads">
+      <button class="pad pad--1" type="button" data-i="0" aria-label="1 だいだい"><span class="pad-num">1</span></button>
+      <button class="pad pad--2" type="button" data-i="1" aria-label="2 きいろ"><span class="pad-num">2</span></button>
+      <button class="pad pad--3" type="button" data-i="2" aria-label="3 あおみどり"><span class="pad-num">3</span></button>
+      <button class="pad pad--4" type="button" data-i="3" aria-label="4 かみいろ"><span class="pad-num">4</span></button>
+    </div>
+    <p class="say" id="say">はじめるを押す</p>
+
+    <div class="sheet" id="sheet" hidden>
+      <h2 class="sheet-title" id="sheet-title">ちがう</h2>
+      <p class="sheet-body" id="sheet-body"></p>
+      <button class="btn" id="sheet-btn" type="button">もう一度</button>
+    </div>
+
+    <p class="visually-hidden" id="live" role="status" aria-live="polite"></p>
+  </main>
+
+  <div class="foot">
+    <button class="btn" id="main" type="button">はじめる</button>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var KEY = 'mmg.memory.best';
+
+  function load() {
+    try {
+      var n = parseInt(window.localStorage.getItem(KEY), 10);
+      return isFinite(n) && n > 0 ? n : 0;
+    } catch (e) { return 0; }
+  }
+  function save(n) {
+    try { window.localStorage.setItem(KEY, String(n)); } catch (e) {}
+  }
+
+  var padsEl   = document.getElementById('pads');
+  var pads     = padsEl.querySelectorAll('.pad');
+  var mainBtn  = document.getElementById('main');
+  var sayEl    = document.getElementById('say');
+  var sheet    = document.getElementById('sheet');
+  var sheetTtl = document.getElementById('sheet-title');
+  var sheetBody= document.getElementById('sheet-body');
+  var sheetBtn = document.getElementById('sheet-btn');
+  var live     = document.getElementById('live');
+  var elLen    = document.getElementById('s-len');
+  var elAt     = document.getElementById('s-at');
+  var elBest   = document.getElementById('s-best');
+
+  var HZ = [262, 330, 392, 523];
+
+  var seq    = [];
+  var at     = 0;
+  var best   = load();
+  var state  = 'idle';   /* idle / show / input / over */
+  var timers = [];
+
+  /* --- 音。出せない端末でも進行できること --- */
+  var ac = null;
+  function audio() {
+    if (ac !== null) { return ac; }
+    try {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      ac = AC ? new AC() : false;
+    } catch (e) { ac = false; }
+    return ac;
+  }
+  function tone(i, dur) {
+    try {
+      var c = audio();
+      if (!c) { return; }
+      if (c.state === 'suspended' && c.resume) { c.resume(); }
+      var t = c.currentTime;
+      var o = c.createOscillator();
+      var g = c.createGain();
+      o.type = 'triangle';
+      o.frequency.value = HZ[i];
+      o.connect(g);
+      g.connect(c.destination);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.16, t + 0.014);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + Math.max(0.08, dur / 1000));
+      o.start(t);
+      o.stop(t + Math.max(0.1, dur / 1000) + 0.04);
+    } catch (e) { /* 音が出せなくても遊べる */ }
+  }
+
+  function later(fn, ms) {
+    var id = window.setTimeout(fn, ms);
+    timers.push(id);
+    return id;
+  }
+  function clearAll() {
+    for (var i = 0; i < timers.length; i++) { window.clearTimeout(timers[i]); }
+    timers = [];
+  }
+
+  function light(i, ms) {
+    var el = pads[i];
+    el.classList.add('is-lit');
+    tone(i, ms);
+    later(function () { el.classList.remove('is-lit'); }, ms);
+  }
+
+  function interval() {
+    return Math.max(280, 620 - seq.length * 22);
+  }
+
+  function updateStrip() {
+    elLen.textContent  = String(seq.length);
+    elAt.textContent   = String(at);
+    elBest.textContent = String(best);
+  }
+
+  /* disabled にするとフォーカスが外れてキーボードの人が迷子になる。
+     押せるかどうかは press() の状態判定に任せ、見た目と支援技術にだけ伝える。 */
+  function setBusy(busy) {
+    for (var i = 0; i < pads.length; i++) {
+      pads[i].setAttribute('aria-disabled', busy ? 'true' : 'false');
+    }
+  }
+
+  function nextRound() {
+    seq.push(Math.floor(Math.random() * 4));
+    at = 0;
+    updateStrip();
+    show();
+  }
+
+  function show() {
+    state = 'show';
+    setBusy(true);
+    sayEl.textContent = 'みる（' + seq.length + '）';
+    mainBtn.textContent = 'みている…';
+    var gap = interval();
+    var on  = Math.max(150, Math.round(gap * 0.55));
+
+    for (var i = 0; i < seq.length; i++) {
+      (function (k) {
+        later(function () { light(seq[k], on); }, 320 + k * gap);
+      }(i));
+    }
+    later(function () {
+      state = 'input';
+      setBusy(false);
+      sayEl.textContent = 'なぞる';
+      mainBtn.textContent = 'やりなおす';
+      live.textContent = 'なぞる。長さ ' + seq.length;
+    }, 320 + seq.length * gap);
+  }
+
+  function press(i) {
+    if (state !== 'input') { return; }
+
+    var el = pads[i];
+    el.classList.remove('is-press');
+    void el.offsetWidth;
+    el.classList.add('is-press');
+    light(i, 180);
+
+    if (seq[at] !== i) { fail(); return; }
+
+    at += 1;
+    updateStrip();
+
+    if (at === seq.length) {
+      if (seq.length > best) { best = seq.length; save(best); }
+      updateStrip();
+      state = 'show';
+      setBusy(true);
+      sayEl.textContent = 'そろった';
+      later(nextRound, 700);
+    }
+  }
+
+  function fail() {
+    clearAll();
+    state = 'over';
+    setBusy(true);
+    sheetTtl.textContent = 'ちがう';
+    sheetBody.innerHTML = '<b>' + seq.length + '</b><br>までおぼえた';
+    sheet.hidden = false;
+    sheetBtn.focus();
+    sayEl.textContent = 'はじめるを押す';
+    mainBtn.textContent = 'はじめる';
+    live.textContent = 'ちがう。長さ ' + seq.length + ' まで';
+  }
+
+  function start() {
+    clearAll();
+    audio();               /* 操作の中で作らないと鳴らない端末がある */
+    seq = [];
+    at = 0;
+    sheet.hidden = true;
+    updateStrip();
+    nextRound();
+  }
+
+  /* --- 盤面を正方形に保つ --- */
+  var stageEl = padsEl.parentNode;
+  function fit() {
+    var w = stageEl.clientWidth;
+    var h = stageEl.clientHeight - 28;
+    var size = Math.max(180, Math.min(w, h));
+    padsEl.style.width  = size + 'px';
+    padsEl.style.height = size + 'px';
+  }
+  window.addEventListener('resize', fit);
+  window.addEventListener('orientationchange', fit);
+
+  /* --- 入力 --- */
+  var i;
+  for (i = 0; i < pads.length; i++) {
+    (function (k) {
+      pads[k].addEventListener('pointerdown', function (e) { e.preventDefault(); press(k); });
+      pads[k].addEventListener('keydown', function (e) {
+        if (e.key === ' ' || e.key === 'Enter' || e.key === 'Spacebar') { e.preventDefault(); press(k); }
+      });
+    }(i));
+  }
+
+  document.addEventListener('keydown', function (e) {
+    var n = '1234'.indexOf(e.key);
+    if (n >= 0) { e.preventDefault(); press(n); }
+  });
+
+  mainBtn.addEventListener('click', start);
+  sheetBtn.addEventListener('click', start);
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden && state === 'show') { clearAll(); fail(); }
+  });
+
+  setBusy(true);
+  fit();
+  updateStrip();
+  window.setTimeout(fit, 0);
+}());
+</script>
+</body>
+</html>

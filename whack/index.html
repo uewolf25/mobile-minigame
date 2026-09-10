@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#131C3D">
+<meta name="description" content="3×3から出てくる卓球のボールを30秒で叩く。">
+<title>たたく — mobile-minigame</title>
+<link rel="stylesheet" href="../shared/arcade.css">
+<style>
+:root { --accent: var(--yellow); }
+
+.timer {
+  width: 100%;
+  height: 14px;
+  background: var(--ink-deep);
+  border: var(--edge) solid var(--ink-line);
+  border-radius: 0;
+  overflow: hidden;
+  flex: none;
+}
+.timer-fill {
+  height: 100%;
+  width: 100%;
+  background: var(--yellow);
+  transform-origin: left center;
+}
+.timer-fill.is-low { background: var(--orange); }
+
+.holes {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  gap: 7px;
+  padding: 7px;
+  margin-top: 10px;
+  background: var(--ink-deep);
+  border: var(--edge) solid var(--ink-line);
+  border-radius: 0;
+  box-shadow: var(--drop) var(--drop) 0 var(--accent);
+}
+
+.hole {
+  -webkit-appearance: none;
+  appearance: none;
+  position: relative;
+  padding: 0;
+  background: var(--ink);
+  border: 0;
+  border-radius: 0;
+  box-shadow: inset 0 0 0 3px var(--ink-deep);
+  cursor: pointer;
+  touch-action: manipulation;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.ball {
+  position: absolute;
+  inset: 8%;
+  width: 84%;
+  height: 84%;
+  display: none;
+}
+.hole.is-up .ball { display: block; animation: mmg-up 160ms ease-out; }
+.hole.is-hit .ball { display: block; animation: mmg-hit 140ms ease-in forwards; }
+
+@keyframes mmg-up {
+  0%   { transform: scale(.4) translateY(18%); }
+  70%  { transform: scale(1.06); }
+  100% { transform: scale(1); }
+}
+@keyframes mmg-hit {
+  0%   { transform: scale(1); }
+  100% { transform: scale(1.5); opacity: 0; }
+}
+@keyframes mmg-shake {
+  0%   { transform: translateX(0); }
+  25%  { transform: translateX(-3px); }
+  75%  { transform: translateX(3px); }
+  100% { transform: translateX(0); }
+}
+.hole.is-miss { animation: mmg-shake 120ms linear; }
+
+.hole:disabled { cursor: default; }
+</style>
+</head>
+<body>
+<div class="screen">
+
+  <header class="top">
+    <a class="back" href="../" aria-label="一覧にもどる">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="square" aria-hidden="true">
+        <path d="M15 4 L7 12 L15 20"></path>
+      </svg>
+    </a>
+    <h1 class="top-title"><span class="plate" data-text="たたく">たたく</span></h1>
+    <span class="top-note">30秒</span>
+  </header>
+
+  <div class="strip">
+    <div class="stat">
+      <span class="stat-label">たたいた</span>
+      <span class="stat-value" id="s-score">0</span>
+    </div>
+    <div class="stat stat--accent">
+      <span class="stat-label">さいこう</span>
+      <span class="stat-value" id="s-best">0</span>
+    </div>
+    <div class="stat">
+      <span class="stat-label">のこり</span>
+      <span class="stat-value" id="s-time">30<span class="unit">秒</span></span>
+    </div>
+  </div>
+
+  <main class="stage">
+    <div class="timer"><div class="timer-fill" id="bar"></div></div>
+    <div class="holes" id="holes"></div>
+
+    <div class="sheet" id="sheet">
+      <h2 class="sheet-title" id="sheet-title">たたく</h2>
+      <p class="sheet-body" id="sheet-body">30秒で何個たたけるか。<br>空振りは減点なし。</p>
+      <button class="btn" id="sheet-btn" type="button">はじめる</button>
+    </div>
+
+    <p class="visually-hidden" id="live" role="status" aria-live="polite"></p>
+  </main>
+
+  <div class="foot">
+    <button class="btn" id="main" type="button">はじめる</button>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var KEY = 'mmg.whack.best';
+
+  function load() {
+    try {
+      var n = parseInt(window.localStorage.getItem(KEY), 10);
+      return isFinite(n) && n > 0 ? n : 0;
+    } catch (e) { return 0; }
+  }
+  function save(n) {
+    try { window.localStorage.setItem(KEY, String(n)); } catch (e) {}
+  }
+
+  var DURATION   = 30000;
+  var SPAWN_FROM = 760, SPAWN_TO = 380;
+  var STAY_FROM  = 950, STAY_TO  = 530;
+
+  var holesEl  = document.getElementById('holes');
+  var stageEl  = holesEl.parentNode;
+  var bar      = document.getElementById('bar');
+  var mainBtn  = document.getElementById('main');
+  var sheet    = document.getElementById('sheet');
+  var sheetTtl = document.getElementById('sheet-title');
+  var sheetBody= document.getElementById('sheet-body');
+  var sheetBtn = document.getElementById('sheet-btn');
+  var live     = document.getElementById('live');
+  var elScore  = document.getElementById('s-score');
+  var elBest   = document.getElementById('s-best');
+  var elTime   = document.getElementById('s-time');
+
+  var BALL =
+    '<svg class="ball" viewBox="0 0 100 100" aria-hidden="true">' +
+      '<circle cx="55" cy="55" r="37" fill="#FFC93C"></circle>' +
+      '<circle cx="50" cy="50" r="37" fill="#EFEAE0"></circle>' +
+      '<ellipse cx="50" cy="50" rx="31" ry="11" fill="none" stroke="#0B1027" stroke-width="4"' +
+        ' transform="rotate(-18 50 50)"></ellipse>' +
+    '</svg>';
+
+  var holes = [];
+  var i;
+  for (i = 0; i < 9; i++) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'hole';
+    b.setAttribute('data-i', String(i));
+    b.setAttribute('aria-label', (i + 1) + 'ばんめ');
+    b.innerHTML = BALL;
+    b.disabled = true;
+    holesEl.appendChild(b);
+    holes.push(b);
+  }
+
+  var running   = false;
+  var score     = 0;
+  var best      = load();
+  var startedAt = 0;
+  var spawnT    = 0;
+  var raf       = 0;
+  var upUntil   = [];   /* 穴ごとの取り下げタイマー */
+  for (i = 0; i < 9; i++) { upUntil.push(0); }
+
+  function nowMs() {
+    return (window.performance && window.performance.now)
+      ? window.performance.now()
+      : new Date().getTime();
+  }
+
+  function progress() {
+    var p = (nowMs() - startedAt) / DURATION;
+    return p < 0 ? 0 : (p > 1 ? 1 : p);
+  }
+
+  function lerp(a, b, p) { return a + (b - a) * p; }
+
+  function updateStrip(remain) {
+    elScore.textContent = String(score);
+    elBest.textContent  = String(best);
+    elTime.innerHTML = Math.max(0, Math.ceil(remain / 1000)) + '<span class="unit">秒</span>';
+  }
+
+  function tick() {
+    raf = window.requestAnimationFrame(function () {
+      if (!running) { return; }
+      var remain = DURATION - (nowMs() - startedAt);
+      if (remain <= 0) { finish(); return; }
+      var ratio = remain / DURATION;
+      bar.style.transform = 'scaleX(' + ratio + ')';
+      if (ratio < 0.2) { bar.classList.add('is-low'); }
+      updateStrip(remain);
+      tick();
+    });
+  }
+
+  function scheduleSpawn() {
+    if (!running) { return; }
+    var wait = lerp(SPAWN_FROM, SPAWN_TO, progress());
+    spawnT = window.setTimeout(function () {
+      raise();
+      scheduleSpawn();
+    }, wait);
+  }
+
+  function raise() {
+    if (!running) { return; }
+    var free = [];
+    for (var k = 0; k < holes.length; k++) {
+      if (!holes[k].classList.contains('is-up')) { free.push(k); }
+    }
+    if (!free.length) { return; }
+
+    var at = free[Math.floor(Math.random() * free.length)];
+    var el = holes[at];
+    el.classList.remove('is-hit');
+    el.classList.add('is-up');
+
+    var stay = lerp(STAY_FROM, STAY_TO, progress());
+    if (upUntil[at]) { window.clearTimeout(upUntil[at]); }
+    upUntil[at] = window.setTimeout(function () {
+      el.classList.remove('is-up');
+      upUntil[at] = 0;
+    }, stay);
+  }
+
+  function strike(at) {
+    if (!running) { return; }
+    var el = holes[at];
+
+    if (el.classList.contains('is-up')) {
+      el.classList.remove('is-up');
+      if (upUntil[at]) { window.clearTimeout(upUntil[at]); upUntil[at] = 0; }
+      el.classList.remove('is-hit');
+      void el.offsetWidth;
+      el.classList.add('is-hit');
+      score += 1;
+      updateStrip(DURATION - (nowMs() - startedAt));
+    } else {
+      /* 空振りは減点しない。軽く揺らすだけ。 */
+      el.classList.remove('is-miss');
+      void el.offsetWidth;
+      el.classList.add('is-miss');
+    }
+  }
+
+  function clearBalls() {
+    for (var k = 0; k < holes.length; k++) {
+      holes[k].classList.remove('is-up', 'is-hit', 'is-miss');
+      if (upUntil[k]) { window.clearTimeout(upUntil[k]); upUntil[k] = 0; }
+    }
+  }
+
+  function setPlayable(on) {
+    for (var k = 0; k < holes.length; k++) { holes[k].disabled = !on; }
+  }
+
+  function start() {
+    clearBalls();
+    running = true;
+    score = 0;
+    startedAt = nowMs();
+    bar.classList.remove('is-low');
+    bar.style.transform = 'scaleX(1)';
+    sheet.hidden = true;
+    setPlayable(true);
+    mainBtn.textContent = 'やりなおす';
+    updateStrip(DURATION);
+    scheduleSpawn();
+    tick();
+    live.textContent = 'はじめ';
+  }
+
+  function finish() {
+    running = false;
+    if (spawnT) { window.clearTimeout(spawnT); spawnT = 0; }
+    if (raf) { window.cancelAnimationFrame(raf); raf = 0; }
+    clearBalls();
+    setPlayable(false);
+    bar.style.transform = 'scaleX(0)';
+    updateStrip(0);
+
+    if (score > best) { best = score; save(best); }
+    updateStrip(0);
+
+    sheetTtl.textContent = 'おしまい';
+    sheetBody.innerHTML = '<b>' + score + '</b><br>たたいた数';
+    sheetBtn.textContent = 'もう一度';
+    sheet.hidden = false;
+    sheetBtn.focus();
+    mainBtn.textContent = 'はじめる';
+    live.textContent = 'おしまい。' + score + '個';
+  }
+
+  /* --- 盤面を正方形に保つ --- */
+  function fit() {
+    var w = stageEl.clientWidth;
+    var h = stageEl.clientHeight - 24;   /* バーぶん */
+    var size = Math.max(180, Math.min(w, h));
+    holesEl.style.width  = size + 'px';
+    holesEl.style.height = size + 'px';
+  }
+  window.addEventListener('resize', fit);
+  window.addEventListener('orientationchange', fit);
+
+  /* --- 入力 --- */
+  for (i = 0; i < holes.length; i++) {
+    (function (k) {
+      holes[k].addEventListener('pointerdown', function (e) { e.preventDefault(); strike(k); });
+      holes[k].addEventListener('keydown', function (e) {
+        if (e.key === ' ' || e.key === 'Enter' || e.key === 'Spacebar') { e.preventDefault(); strike(k); }
+      });
+    }(i));
+  }
+
+  document.addEventListener('keydown', function (e) {
+    var n = '123456789'.indexOf(e.key);
+    if (n >= 0) { e.preventDefault(); strike(n); }
+  });
+
+  mainBtn.addEventListener('click', start);
+  sheetBtn.addEventListener('click', start);
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden && running) { finish(); }
+  });
+
+  fit();
+  updateStrip(DURATION);
+  bar.style.transform = 'scaleX(1)';
+  window.setTimeout(fit, 0);
+}());
+</script>
+</body>
+</html>
