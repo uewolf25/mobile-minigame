@@ -1,0 +1,22 @@
+# /etc/cloudflared/config.yml
+#
+# トンネルは外向きにしか繋がない。ルータのポート開放は一切要らず、
+# 自宅の IP アドレスも表に出ない。
+#
+#   cloudflared tunnel login
+#   cloudflared tunnel create mmg
+#   cloudflared tunnel route dns mmg example.com
+#   cloudflared tunnel route dns mmg dev.example.com
+
+tunnel: 00000000-0000-0000-0000-000000000000
+credentials-file: /etc/cloudflared/00000000-0000-0000-0000-000000000000.json
+
+# UDP/443 が出られない環境なら http2 に落とす
+# protocol: http2
+
+ingress:
+  - hostname: example.com
+    service: http://127.0.0.1:8080
+  - hostname: dev.example.com
+    service: http://127.0.0.1:8081
+  - service: http_status:404
