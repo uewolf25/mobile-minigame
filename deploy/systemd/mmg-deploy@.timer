@@ -1,0 +1,12 @@
+[Unit]
+Description=mobile-minigame の更新を定期的に取りに行く (%i)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+RandomizedDelaySec=30s
+AccuracySec=15s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

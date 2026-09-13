@@ -63,6 +63,8 @@
 - 記録は `localStorage`、キーは `mmg.<フォルダ名>.best`。
   必ず try/catch で包み、保存できない環境でもゲームは動くこと
 - サーバー送信なし。スコアは端末内に閉じる
+- 配信するのは上記のサイト7ファイルだけ。`deploy/` と `README.md` は
+  `.gitattributes` の `export-ignore` で `git archive` から外れるため web ルートに出ない
 
 ### スマホ対応の必須事項
 
@@ -83,6 +85,7 @@ merge/index.html    そろえる
 dodge/index.html    くぐる
 memory/index.html   おぼえる
 whack/index.html    たたく
+deploy/             自宅サーバへの配置一式（配信物には含まれない）
 ```
 
 各ゲーム画面は共通の骨格を持つ:
@@ -104,10 +107,20 @@ whack/index.html    たたく
 
 ### 遊ぶ
 
-リポジトリの Settings → Pages で `main` ブランチのルートを配信先にすると
-`https://uewolf25.github.io/mobile-minigame/` で開ける。
-手元で見るときは、このフォルダを静的配信すればよい（`file://` でも動くが、
-`localStorage` がブロックされて記録が残らない）。
+自宅サーバの LXC に置き、Cloudflare Tunnel 経由で独自ドメインから配信する。
+ルータのポート開放はせず、自宅の IP アドレスも表に出さない。
+手順と設定一式は `deploy/` にある。
+
+`main` に入った変更は2分以内に本番へ、`staging` ブランチは検証用ホストへ流れる。
+実機で触って決めたいこと（難易度や中断時の挙動）は検証側で確かめてから `main` に入れる。
+
+手元で見るときは、このフォルダを静的配信すればよい。
+
+```
+python3 -m http.server 8000
+```
+
+`file://` でも画面は出るが、`localStorage` がブロックされて記録が残らない。
 
 ## 各ゲームの仕様
 
